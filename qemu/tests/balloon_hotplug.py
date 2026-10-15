@@ -64,7 +64,6 @@ def run(test, params, env):
     pm_test_after_plug = params.get("pm_test_after_plug")
     pm_test_after_unplug = params.get("pm_test_after_unplug")
     unplug_timeout = params.get("unplug_timeout", 30)
-    idx = 0
     vm = env.get_vm(params["main_vm"])
     vm.verify_alive()
 
@@ -74,7 +73,7 @@ def run(test, params, env):
         vm.devices.set_dirty()
         new_dev = qdevices.QDevice(
             balloon_device,
-            {"id": "balloon%d" % idx},
+            {"id": "balloon%d" % i},
             parent_bus={"aobject": params.get("balloon_bus", "pci.0")},
         )
 
@@ -86,10 +85,10 @@ def run(test, params, env):
             test.fail("Failed to hotplug balloon in iteration %s, %s" % (i, out[0]))
 
         # temporary workaround for migration
-        vm.params["balloon"] = "balloon%d" % idx
-        vm.params["balloon_dev_devid"] = "balloon%d" % idx
+        vm.params["balloon"] = "balloon%d" % i
+        vm.params["balloon_dev_devid"] = "balloon%d" % i
         vm.params["balloon_dev_add_bus"] = "yes"
-        devs = vm.devices.get_by_params({"id": "balloon%d" % idx})
+        devs = vm.devices.get_by_params({"id": "balloon%d" % i})
         vm.params["balloon_pci_bus"] = devs[0]["bus"]
 
         if params["os_type"] == "windows":
@@ -147,7 +146,13 @@ def run(test, params, env):
     # for windows guest, disable/uninstall driver to get memory leak based on
     # driver verifier is enabled
     if params.get("os_type") == "windows":
-        out = vm.devices.simple_hotplug(new_dev, vm.monitor)
+        vm.devices.set_dirty()
+        final_dev = qdevices.QDevice(
+            balloon_device,
+            {"id": "balloon%d" % (i + 1)},
+            parent_bus={"aobject": params.get("balloon_bus", "pci.0")},
+        )
+        out = vm.devices.simple_hotplug(final_dev, vm.monitor)
         if out[1] is False:
             test.fail("Failed to hotplug balloon at last, output is %s" % out[0])
         win_driver_utils.memory_leak_check(vm, test, params)
