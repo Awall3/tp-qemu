@@ -68,27 +68,46 @@ def run(test, params, env):
     vm.verify_alive()
 
     balloon_device = params.get("balloon_device", "virtio-balloon-pci")
+    balloon_id = "balloon0"  # Reuse same ID - tests proper cleanup after unplug
+
     error_context.context("Hotplug and unplug balloon device in a loop", test.log.info)
     for i in range(int(params.get("balloon_repeats", 3))):
+        test.log.info("DEBUG: ========== Starting iteration %d ==========" % i)
+        all_balloons_before = vm.devices.get_by_params({"driver": "virtio-balloon-pci"})
+        test.log.info("DEBUG: Balloon devices at start of iteration %d: %s" %
+                     (i, [dev.get_aid() for dev in all_balloons_before]))
+
         vm.devices.set_dirty()
+        test.log.info("DEBUG: Called vm.devices.set_dirty()")
+
         new_dev = qdevices.QDevice(
             balloon_device,
-            {"id": "balloon%d" % i},
+            {"id": balloon_id},
             parent_bus={"aobject": params.get("balloon_bus", "pci.0")},
         )
+        test.log.info("DEBUG: Created QDevice with id='%s'" % balloon_id)
 
         error_context.context(
             "Hotplug balloon device for %d times" % (i + 1), test.log.info
         )
         out = vm.devices.simple_hotplug(new_dev, vm.monitor)
         if out[1] is False:
+            test.log.error("DEBUG: Hotplug failed! out[0]=%s" % out[0])
             test.fail("Failed to hotplug balloon in iteration %s, %s" % (i, out[0]))
+        test.log.info("DEBUG: Hotplug succeeded, out=%s" % str(out))
 
         # temporary workaround for migration
-        vm.params["balloon"] = "balloon%d" % i
-        vm.params["balloon_dev_devid"] = "balloon%d" % i
+        vm.params["balloon"] = balloon_id
+        vm.params["balloon_dev_devid"] = balloon_id
         vm.params["balloon_dev_add_bus"] = "yes"
-        devs = vm.devices.get_by_params({"id": "balloon%d" % i})
+        devs = vm.devices.get_by_params({"id": balloon_id})
+        test.log.info("DEBUG: After hotplug, looking for '%s', found %d devices" % (balloon_id, len(devs)))
+        if devs:
+            test.log.info("DEBUG: Device aid=%s, qid=%s" % (devs[0].get_aid(), devs[0].get_qid()))
+        else:
+            test.log.error("DEBUG: ERROR - get_by_params returned empty list!")
+            all_devs = vm.devices.get_by_params({})
+            test.log.error("DEBUG: All devices: %s" % [dev.get_aid() for dev in all_devs[:20]])
         vm.params["balloon_pci_bus"] = devs[0]["bus"]
 
         if params["os_type"] == "windows":
@@ -120,12 +139,32 @@ def run(test, params, env):
             "Unplug balloon device for %d times" % (i + 1), test.log.info
         )
 
+        # Verify device exists before unplugging
+        test.log.info("DEBUG: About to unplug device with id=%s" % balloon_id)
+        if devs:
+            test.log.info("DEBUG: devs[0].get_aid()=%s, devs[0].get_qid()=%s" %
+                         (devs[0].get_aid(), devs[0].get_qid()))
+
+        # Use the device ID directly for clarity
         out = vm.devices.simple_unplug(
-            devs[0].get_aid(), vm.monitor, timeout=unplug_timeout
+            balloon_id, vm.monitor, timeout=unplug_timeout
         )
         if out[1] is False:
+            test.log.error("DEBUG: Unplug FAILED! out=%s" % str(out))
+            all_balloons = vm.devices.get_by_params({"driver": "virtio-balloon-pci"})
+            test.log.error("DEBUG: All balloon devices in vm.devices after failed unplug: %s" %
+                          [dev.get_aid() for dev in all_balloons])
             test.fail("Failed to unplug balloon in iteration %s, %s" % (i, out[0]))
+
+        test.log.info("DEBUG: Unplug succeeded! out=%s" % str(out))
         time.sleep(2)
+
+        # Verify cleanup after unplug
+        remaining_balloons = vm.devices.get_by_params({"driver": "virtio-balloon-pci"})
+        test.log.info("DEBUG: After unplug, remaining balloon devices: %s" %
+                     [dev.get_aid() for dev in remaining_balloons])
+        if remaining_balloons:
+            test.log.warning("DEBUG: WARNING - Devices still present after unplug! This may cause issues in next iteration.")
 
         if params.get("migrate_after_unplug", "no") == "yes":
             error_context.context(
@@ -146,10 +185,11 @@ def run(test, params, env):
     # for windows guest, disable/uninstall driver to get memory leak based on
     # driver verifier is enabled
     if params.get("os_type") == "windows":
+        test.log.info("DEBUG: Windows final hotplug, reusing balloon0")
         vm.devices.set_dirty()
         final_dev = qdevices.QDevice(
             balloon_device,
-            {"id": "balloon%d" % (i + 1)},
+            {"id": balloon_id},  # Reuse balloon0
             parent_bus={"aobject": params.get("balloon_bus", "pci.0")},
         )
         out = vm.devices.simple_hotplug(final_dev, vm.monitor)
