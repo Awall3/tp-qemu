@@ -158,14 +158,33 @@ def run(test, params, env):
             test.fail("Failed to unplug balloon in iteration %s, %s" % (i, out[0]))
 
         test.log.info("DEBUG: Unplug succeeded! out=%s" % str(out))
-        time.sleep(2)
 
-        # Verify cleanup after unplug
+        # Wait and verify device is fully removed before continuing
+        # Heavy memory deflation can cause slow device release
+        test.log.info("DEBUG: Waiting for device cleanup to complete...")
+        time.sleep(5)
+
+        # Force device container refresh to see actual state
+        vm.devices.set_dirty()
         remaining_balloons = vm.devices.get_by_params({"driver": "virtio-balloon-pci"})
-        test.log.info("DEBUG: After unplug, remaining balloon devices: %s" %
+        test.log.info("DEBUG: After unplug + set_dirty, remaining balloon devices: %s" %
                      [dev.get_aid() for dev in remaining_balloons])
+
+        # Wait up to 30s for device to fully disappear
+        wait_time = 0
+        while remaining_balloons and wait_time < 30:
+            test.log.warning("DEBUG: Device still present after %ds, waiting..." % wait_time)
+            time.sleep(2)
+            wait_time += 2
+            vm.devices.set_dirty()
+            remaining_balloons = vm.devices.get_by_params({"driver": "virtio-balloon-pci"})
+
         if remaining_balloons:
-            test.log.warning("DEBUG: WARNING - Devices still present after unplug! This may cause issues in next iteration.")
+            test.log.error("DEBUG: ERROR - Devices still present after %ds: %s" %
+                          (wait_time, [dev.get_aid() for dev in remaining_balloons]))
+            test.fail("Device cleanup failed - balloon device still present after unplug")
+        else:
+            test.log.info("DEBUG: Device successfully removed after %ds" % (wait_time + 5))
 
         if params.get("migrate_after_unplug", "no") == "yes":
             error_context.context(
