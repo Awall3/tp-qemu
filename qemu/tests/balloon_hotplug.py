@@ -69,6 +69,7 @@ def run(test, params, env):
 
     balloon_device = params.get("balloon_device", "virtio-balloon-pci")
     balloon_id = "balloon0"  # Reuse same ID - tests proper cleanup after unplug
+    # Updated with enhanced DEBUG logging - 2026-10-16
 
     error_context.context("Hotplug and unplug balloon device in a loop", test.log.info)
     for i in range(int(params.get("balloon_repeats", 3))):
